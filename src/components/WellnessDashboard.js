@@ -1,10 +1,17 @@
 import React, { useState, useEffect,useRef } from 'react';
 import '../index.css';
 import * as faceapi from 'face-api.js';
+import { db } from '../firebase'; // your firebase config file
+import { collection, addDoc, query, where, getDocs, onSnapshot } from 'firebase/firestore';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { auth } from '../firebase';
+import { storage } from '../firebase';
+import { onAuthStateChanged } from 'firebase/auth';
 
 import { Heart, MessageCircle, Mic, Calendar, TrendingUp, Camera, Settings, User, Moon, Sun, Activity, Smile, Meh, Frown, MicOff, Play, Pause, Square, X } from 'lucide-react';
 
 const WellnessDashboard = () => {
+  const [user, setUser] = useState(null);
   const [currentMood, setCurrentMood] = useState('');
   const [journalEntry, setJournalEntry] = useState('');
   const [isRecording, setIsRecording] = useState(false);
@@ -12,6 +19,9 @@ const WellnessDashboard = () => {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [moodHistory, setMoodHistory] = useState([]);
   const [journalEntries, setJournalEntries] = useState([]);
+  const journalListenerRef = useRef(null);
+  const moodListenerRef = useRef(null);
+  const voiceListenerRef = useRef(null);
   const [voiceRecordings, setVoiceRecordings] = useState([]);
   const [recordingTime, setRecordingTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -34,9 +44,10 @@ const WellnessDashboard = () => {
   const streamRef = useRef(null);
 
   useEffect(() => {
+    // Timer to update clock
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
-    
-    // Check for speech recognition support
+
+    // Speech Recognition setup
     if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
       setSpeechSupported(true);
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -45,18 +56,75 @@ const WellnessDashboard = () => {
       recognitionRef.current.interimResults = true;
       recognitionRef.current.lang = 'en-US';
     }
-    
+
     // Load Face-API.js models
     loadFaceApiModels();
-    
+
+    // Firebase Auth listener
+    const unsubscribeAuth = onAuthStateChanged(auth, (firebaseUser) => {
+      if (firebaseUser) {
+        setUser(firebaseUser);
+
+        // Firestore journal listener
+        const journalQuery = query(
+          collection(db, 'journalEntries'),
+          where('uid', '==', firebaseUser.uid)
+        );
+
+        const unsubscribeJournal = onSnapshot(journalQuery, (snapshot) => {
+          const entries = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          setJournalEntries(entries);
+        });
+        journalListenerRef.current = unsubscribeJournal;
+
+        // Firestore mood history listener
+        const moodQuery = query(
+          collection(db, 'moodHistory'),
+          where('uid', '==', firebaseUser.uid)
+        );
+
+        const unsubscribeMood = onSnapshot(moodQuery, (snapshot) => {
+          const moods = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          setMoodHistory(moods);
+        });
+        moodListenerRef.current = unsubscribeMood;
+
+        // Firestore voice recordings listener
+        const voiceQuery = query(
+          collection(db, 'voiceRecordings'),
+          where('uid', '==', firebaseUser.uid)
+        );
+
+        const unsubscribeVoice = onSnapshot(voiceQuery, (snapshot) => {
+          const recordings = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          setVoiceRecordings(recordings);
+        });
+        voiceListenerRef.current = unsubscribeVoice;
+
+      } else {
+        setUser(null);
+        setJournalEntries([]);
+        setMoodHistory([]);
+        setVoiceRecordings([]);
+
+        if (journalListenerRef.current) journalListenerRef.current();
+        if (moodListenerRef.current) moodListenerRef.current();
+        if (voiceListenerRef.current) voiceListenerRef.current();
+      }
+    });
+
+    // Cleanup on unmount
     return () => {
       clearInterval(timer);
       if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-      }
+      if (streamRef.current) streamRef.current.getTracks().forEach(track => track.stop());
+
+      unsubscribeAuth();
+      if (journalListenerRef.current) journalListenerRef.current();
+      if (moodListenerRef.current) moodListenerRef.current();
     };
-  }, []);
+}, []);
+
 
   const loadFaceApiModels = async () => {
     try {
@@ -210,22 +278,27 @@ const WellnessDashboard = () => {
     { id: 'sad', icon: '😢', color: 'bg-red-500', label: 'Sad', score: 1 }
   ];
 
-  const handleMoodSelect = (moodId, isAiDetected = false, note = '') => {
+  const handleMoodSelect = async (moodId, isAiDetected = false, note = '') => {
     setCurrentMood(moodId);
     const selectedMood = moods.find(m => m.id === moodId);
+
     const newMoodEntry = {
-      id: Date.now(),
       date: new Date().toISOString().split('T')[0],
       time: new Date().toLocaleTimeString(),
       mood: moodId,
       score: selectedMood.score,
       timestamp: Date.now(),
       isAiDetected,
-      note
+      note,
+      uid: user?.uid || ''  // assuming 'user' is in state
     };
-    
-    const updatedHistory = [...moodHistory, newMoodEntry];
-    setMoodHistory(updatedHistory);
+
+    try {
+      await addDoc(collection(db, 'moodHistory'), newMoodEntry);
+    } catch (error) {
+      console.error('Failed to save mood entry:', error);
+      alert('Failed to save mood entry. Please try again.');
+    }
   };
 
   const startVoiceRecording = async () => {
@@ -233,39 +306,62 @@ const WellnessDashboard = () => {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaRecorderRef.current = new MediaRecorder(stream);
       audioChunksRef.current = [];
-      
+
       mediaRecorderRef.current.ondataavailable = (event) => {
         audioChunksRef.current.push(event.data);
       };
-      
-      mediaRecorderRef.current.onstop = () => {
+
+      mediaRecorderRef.current.onstop = async () => {
         const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
-        const audioUrl = URL.createObjectURL(audioBlob);
-        
-        const newRecording = {
-          id: Date.now(),
-          date: new Date().toLocaleDateString(),
-          time: new Date().toLocaleTimeString(),
-          duration: recordingTime,
-          url: audioUrl,
-          transcript: '',
-          timestamp: Date.now()
-        };
-        
-        const updatedRecordings = [...voiceRecordings, newRecording];
-        setVoiceRecordings(updatedRecordings);
-        
+
+        const formData = new FormData();
+        formData.append('file', audioBlob);
+        formData.append('upload_preset', 'voice_uploads'); // 👈 Your unsigned preset name
+
+        try {
+          const cloudinaryRes = await fetch('https://api.cloudinary.com/v1_1/drpqytgbz/video/upload', {
+            method: 'POST',
+            body: formData,
+          });
+
+          const cloudinaryData = await cloudinaryRes.json();
+
+          if (!cloudinaryRes.ok) {
+            console.error('Cloudinary upload error:', cloudinaryData);
+            throw new Error(cloudinaryData.error?.message || 'Upload failed');
+          }
+
+          const audioUrl = cloudinaryData.secure_url;
+
+          const newRecording = {
+            id: Date.now(),
+            uid: user.uid,
+            date: new Date().toLocaleDateString(),
+            time: new Date().toLocaleTimeString(),
+            duration: recordingTime,
+            url: audioUrl,
+            timestamp: Date.now(),
+          };
+
+          await addDoc(collection(db, 'voiceRecordings'), newRecording);
+          setVoiceRecordings((prev) => [...prev, newRecording]);
+
+        } catch (error) {
+          console.error('Error uploading to Cloudinary:', error);
+          alert('Failed to upload recording');
+        }
+
         stream.getTracks().forEach(track => track.stop());
       };
-      
+
       mediaRecorderRef.current.start();
       setIsRecording(true);
       setRecordingTime(0);
-      
+
       recordingTimerRef.current = setInterval(() => {
         setRecordingTime(prev => prev + 1);
       }, 1000);
-      
+
       if (speechSupported && recognitionRef.current) {
         recognitionRef.current.onresult = (event) => {
           let transcript = '';
@@ -276,7 +372,7 @@ const WellnessDashboard = () => {
         };
         recognitionRef.current.start();
       }
-      
+
     } catch (error) {
       console.error('Error accessing microphone:', error);
       alert('Unable to access microphone. Please check permissions.');
@@ -329,21 +425,30 @@ const WellnessDashboard = () => {
     }
   };
 
-  const saveJournalEntry = () => {
+  const saveJournalEntry = async () => {
+    if (!user) {
+      alert('You must be logged in to save entries.');
+      return;
+    }
+
     if (journalEntry.trim()) {
       const newEntry = {
-        id: Date.now(),
         date: new Date().toLocaleDateString(),
         time: new Date().toLocaleTimeString(),
         content: journalEntry,
         mood: currentMood,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        uid: user.uid
       };
-      
-      const updatedEntries = [...journalEntries, newEntry];
-      setJournalEntries(updatedEntries);
-      setJournalEntry('');
-      alert('Journal entry saved!');
+
+      try {
+        await addDoc(collection(db, 'journalEntries'), newEntry);
+        setJournalEntry('');
+        alert('Journal entry saved!');
+      } catch (error) {
+        console.error('Error saving journal entry:', error);
+        alert('Failed to save journal entry. Please try again.');
+      }
     }
   };
 
@@ -677,6 +782,20 @@ const WellnessDashboard = () => {
                 </button>
               </div>
               <span className="text-white/60 text-sm">{journalEntry.length}/2000 characters</span>
+            </div>
+            <div className="mt-6 max-h-64 overflow-y-auto bg-white/10 rounded-lg p-4 border border-white/20 text-white">
+              <h3 className="font-semibold mb-2">Your Past Journal Entries</h3>
+              {journalEntries.length === 0 ? (
+                <p>No entries yet.</p>
+              ) : (
+                journalEntries.map(entry => (
+                  <div key={entry.id} className="mb-3 border-b border-white/20 pb-2">
+                    <p><strong>{entry.date} {entry.time}</strong></p>
+                    <p>{entry.content}</p>
+                    <p className="text-sm text-white/60">Mood: {entry.mood}</p>
+                  </div>
+                ))
+              )}
             </div>
           </div>
 
