@@ -7,6 +7,7 @@ import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { auth } from '../firebase';
 import { storage } from '../firebase';
 import { onAuthStateChanged } from 'firebase/auth';
+import DialogflowChat from './DialogflowChat'; // Assuming you have a DialogflowChat component
 
 import { Heart, MessageCircle, Mic, Calendar, TrendingUp, Camera, Settings, User, Moon, Sun, Activity, Smile, Meh, Frown, MicOff, Play, Pause, Square, X } from 'lucide-react';
 
@@ -125,19 +126,27 @@ const WellnessDashboard = () => {
     };
 }, []);
 
+useEffect(() => {
+  if (isCameraOpen && streamRef.current && videoRef.current) {
+    console.log('Attaching stream to video element...');
+    videoRef.current.srcObject = streamRef.current;
+    videoRef.current
+      .play()
+      .catch((err) => {
+        console.error('Error playing video:', err);
+      });
+  }
+}, [isCameraOpen]);
 
   const loadFaceApiModels = async () => {
     try {
-      // Load Face-API.js from CDN
-      await loadScript('https://cdnjs.cloudflare.com/ajax/libs/face-api.js/0.22.2/face-api.min.js');
-      
-      // Load the required models
-      await faceapi.nets.tinyFaceDetector.loadFromUri('https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights');
-      await faceapi.nets.faceExpressionNet.loadFromUri('https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights');
-      
+      await faceapi.nets.tinyFaceDetector.loadFromUri('/models');
+      await faceapi.nets.faceExpressionNet.loadFromUri('/models');
       setFaceApiLoaded(true);
+      console.log('Face API models loaded successfully');
     } catch (error) {
       console.error('Error loading Face-API models:', error);
+      alert('Failed to load AI models. Please try again.');
     }
   };
 
@@ -158,15 +167,18 @@ const WellnessDashboard = () => {
 
   const startCamera = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { width: 640, height: 480 } 
-      });
-      
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        streamRef.current = stream;
-        setIsCameraOpen(true);
+
+        videoRef.current.onloadedmetadata = () => {
+          videoRef.current.play();
+        };
       }
+
+      streamRef.current = stream; // <- move this above
+      setIsCameraOpen(true);      // <- set this AFTER everything else
     } catch (error) {
       console.error('Error accessing camera:', error);
       alert('Unable to access camera. Please check permissions.');
@@ -255,19 +267,29 @@ const WellnessDashboard = () => {
     const video = videoRef.current;
     const context = canvas.getContext('2d');
 
+    // Check if video dimensions are valid
+    if (video.videoWidth === 0 || video.videoHeight === 0) {
+      alert('Camera not ready. Please try again after a moment.');
+      return;
+    }
+
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
-    context.drawImage(video, 0, 0);
+    context.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-    // Convert to blob and create download link
     canvas.toBlob((blob) => {
+      if (!blob) {
+        alert('Failed to capture photo. Please try again.');
+        return;
+      }
+
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
       a.download = `mood-selfie-${Date.now()}.jpg`;
       a.click();
       URL.revokeObjectURL(url);
-    });
+    }, 'image/jpeg');
   };
 
   const moods = [
@@ -560,12 +582,7 @@ const WellnessDashboard = () => {
               ref={videoRef}
               autoPlay
               playsInline
-              className="w-full rounded-xl"
-              onLoadedData={() => {
-                if (videoRef.current) {
-                  videoRef.current.play();
-                }
-              }}
+              style={{ width: '100%', height: 'auto', backgroundColor: 'black' }}
             />
             <canvas ref={canvasRef} className="hidden" />
             
