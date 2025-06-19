@@ -551,7 +551,9 @@ const WellnessDashboard = () => {
             </button>
           </div>
         </header>
-
+         <div className="w-72">
+            <DialogflowChat />
+          </div>
         {/* Quick Actions */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
           <FeatureCard
