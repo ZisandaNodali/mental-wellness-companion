@@ -29,6 +29,7 @@ const WellnessDashboard = () => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentPlayingId, setCurrentPlayingId] = useState(null);
   const [speechSupported, setSpeechSupported] = useState(false);
+  const [lastProcessedResultIndex, setLastProcessedResultIndex] = useState(0);
   
   // Mood Selfie states
   //const [isCameraOpen, setIsCameraOpen] = useState(false);
@@ -319,33 +320,33 @@ const analyzeImage = async () => {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaRecorderRef.current = new MediaRecorder(stream);
       audioChunksRef.current = [];
-
+  
       mediaRecorderRef.current.ondataavailable = (event) => {
         audioChunksRef.current.push(event.data);
       };
-
+  
       mediaRecorderRef.current.onstop = async () => {
         const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
-
+  
         const formData = new FormData();
         formData.append('file', audioBlob);
-        formData.append('upload_preset', 'voice_uploads'); // 👈 Your unsigned preset name
-
+        formData.append('upload_preset', 'voice_uploads');
+  
         try {
           const cloudinaryRes = await fetch('https://api.cloudinary.com/v1_1/drpqytgbz/video/upload', {
             method: 'POST',
             body: formData,
           });
-
+  
           const cloudinaryData = await cloudinaryRes.json();
-
+  
           if (!cloudinaryRes.ok) {
             console.error('Cloudinary upload error:', cloudinaryData);
             throw new Error(cloudinaryData.error?.message || 'Upload failed');
           }
-
+  
           const audioUrl = cloudinaryData.secure_url;
-
+  
           const newRecording = {
             id: Date.now(),
             uid: user.uid,
@@ -355,58 +356,96 @@ const analyzeImage = async () => {
             url: audioUrl,
             timestamp: Date.now(),
           };
-
+  
           await addDoc(collection(db, 'voiceRecordings'), newRecording);
           setVoiceRecordings((prev) => [...prev, newRecording]);
-
+  
         } catch (error) {
           console.error('Error uploading to Cloudinary:', error);
           alert('Failed to upload recording');
         }
-
+  
         stream.getTracks().forEach(track => track.stop());
       };
-
+  
       mediaRecorderRef.current.start();
       setIsRecording(true);
       setRecordingTime(0);
-
+      setLastProcessedResultIndex(0); // Reset the processed index
+  
       recordingTimerRef.current = setInterval(() => {
         setRecordingTime(prev => prev + 1);
       }, 1000);
-
+  
       if (speechSupported && recognitionRef.current) {
+        // Fixed speech recognition handler
         recognitionRef.current.onresult = (event) => {
-          let transcript = '';
-          for (let i = event.resultIndex; i < event.results.length; i++) {
-            transcript += event.results[i][0].transcript;
+          let newTranscript = '';
+          
+          // Only process new results that haven't been processed yet
+          for (let i = lastProcessedResultIndex; i < event.results.length; i++) {
+            const result = event.results[i];
+            
+            // Only add final results to avoid duplicates from interim results
+            if (result.isFinal) {
+              newTranscript += result[0].transcript + ' ';
+            }
           }
-          setJournalEntry(prev => prev + ' ' + transcript);
+          
+          // Update the last processed index
+          setLastProcessedResultIndex(event.results.length);
+          
+          // Only update journal entry if we have new final transcript
+          if (newTranscript.trim()) {
+            setJournalEntry(prev => prev + newTranscript);
+          }
         };
+  
+        // Handle speech recognition errors
+        recognitionRef.current.onerror = (event) => {
+          console.error('Speech recognition error:', event.error);
+          if (event.error === 'no-speech') {
+            // Restart recognition if no speech detected
+            if (isRecording) {
+              recognitionRef.current.start();
+            }
+          }
+        };
+  
+        // Restart recognition when it ends (for continuous recording)
+        recognitionRef.current.onend = () => {
+          if (isRecording) {
+            recognitionRef.current.start();
+            setLastProcessedResultIndex(0); // Reset index when restarting
+          }
+        };
+  
         recognitionRef.current.start();
       }
-
+  
     } catch (error) {
       console.error('Error accessing microphone:', error);
       alert('Unable to access microphone. Please check permissions.');
     }
   };
+  
 
   const stopVoiceRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
-      setIsRecording(false);
-      
-      if (recordingTimerRef.current) {
-        clearInterval(recordingTimerRef.current);
-        recordingTimerRef.current = null;
-      }
-      
-      if (speechSupported && recognitionRef.current) {
-        recognitionRef.current.stop();
-      }
+  if (mediaRecorderRef.current && isRecording) {
+    mediaRecorderRef.current.stop();
+    setIsRecording(false);
+    setLastProcessedResultIndex(0); // Reset when stopping
+    
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
     }
-  };
+    
+    if (speechSupported && recognitionRef.current) {
+      recognitionRef.current.stop();
+    }
+  }
+};
 
   const handleVoiceRecord = () => {
     if (isRecording) {

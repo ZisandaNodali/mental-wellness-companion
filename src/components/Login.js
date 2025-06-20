@@ -29,7 +29,7 @@ export default function Login() {
 
       // Step 2: Use email to sign in
       await signInWithEmailAndPassword(auth, email, password);
-      navigate('/dashboard');
+      navigate('/dashboard'); // Redirect to dashboard on successful login
     } catch (err) {
       setError(err.message);
     }
