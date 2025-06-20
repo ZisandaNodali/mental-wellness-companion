@@ -132,196 +132,86 @@ const WellnessDashboard = () => {
     };
 }, []);
 
-// // Load FaceAPI models once when camera modal opens
-//   useEffect(() => {
-//     if (!isCameraOpen) return;
-
-//     const loadModels = async () => {
-//       try {
-//         await faceapi.nets.tinyFaceDetector.loadFromUri('/models');
-//         await faceapi.nets.faceExpressionNet.loadFromUri('/models');
-//         setFaceApiLoaded(true);
-//         console.log('Face API models loaded successfully');
-//       } catch (error) {
-//         console.error('Error loading Face-API models:', error);
-//         alert('Failed to load AI models. Please try again.');
-//       }
-//     };
-
-//     loadModels();
-//   }, [isCameraOpen]);
-
-//   // Start or stop camera preview when modal opens/closes
-//   useEffect(() => {
-//     if (!isCameraOpen) {
-//       stopCamera();
-//       return;
-//     }
-
-//     const startCamera = async () => {
-//       try {
-//         const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-//         streamRef.current = stream;
-//         if (videoRef.current) {
-//           videoRef.current.srcObject = stream;
-//           await videoRef.current.play();
-//         }
-//       } catch (err) {
-//         console.error('Error accessing camera:', err);
-//         alert('Could not access the camera.');
-//         setIsCameraOpen(false);
-//       }
-//     };
-
-//     startCamera();
-
-//     return () => {
-//       stopCamera();
-//     };
-//   }, [isCameraOpen]);
-
-//   const stopCamera = () => {
-//     if (streamRef.current) {
-//       streamRef.current.getTracks().forEach(track => track.stop());
-//       streamRef.current = null;
-//     }
-//     if (videoRef.current) {
-//       videoRef.current.srcObject = null;
-//     }
-//     setIsCameraOpen(false);
-//     setDetectedEmotion(null);
-//   };
-
-//   // Analyze the captured image from canvas
-//   const analyzeCapturedImage = async (canvas) => {
-//     if (!faceApiLoaded) {
-//       alert('AI models are still loading...');
-//       return;
-//     }
-
-//     setIsAnalyzing(true);
-//     try {
-//       const detections = await faceapi
-//         .detectAllFaces(canvas, new faceapi.TinyFaceDetectorOptions())
-//         .withFaceExpressions();
-
-//       if (detections.length === 0) {
-//         alert('No face detected. Try again.');
-//         setIsAnalyzing(false);
-//         return;
-//       }
-
-//       const expressions = detections[0].expressions;
-//       const emotion = Object.keys(expressions).reduce((a, b) =>
-//         expressions[a] > expressions[b] ? a : b
-//       );
-//       const confidence = Math.round(expressions[emotion] * 100);
-
-//       const emotionToMood = {
-//         happy: 'great',
-//         neutral: 'okay',
-//         sad: 'sad',
-//         angry: 'low',
-//         fearful: 'low',
-//         disgusted: 'low',
-//         surprised: 'good',
-//       };
-
-//       const detectedMood = emotionToMood[emotion] || 'okay';
-
-//       setDetectedEmotion({
-//         emotion,
-//         mood: detectedMood,
-//         confidence,
-//         timestamp: new Date().toLocaleString(),
-//       });
-
-//       // You can call your handleMoodSelect here if needed
-//       // handleMoodSelect(detectedMood, true, `AI detected: ${emotion} (${confidence}% confidence)`);
-
-//     } catch (err) {
-//       console.error('Analysis error:', err);
-//       alert('Failed to analyze mood. Try again.');
-//     } finally {
-//       setIsAnalyzing(false);
-//     }
-//   };
-
-//   // Capture photo from video and analyze
-//   const capturePhoto = () => {
-//     if (!videoRef.current || !faceApiLoaded) {
-//       alert('Camera or AI models not ready yet.');
-//       return;
-//     }
-
-//     const video = videoRef.current;
-//     const canvas = document.createElement('canvas');
-//     canvas.width = video.videoWidth;
-//     canvas.height = video.videoHeight;
-//     const ctx = canvas.getContext('2d');
-//     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-//     // ❌ DO NOT stop camera yet
-//     // ✅ Let user stay in modal, view result or retry
-//     analyzeCapturedImage(canvas);
-//   };
-
 useEffect(() => {
   if (!previewSrc || !faceApiLoaded) return;
+  
+  // Don't auto-analyze, let user trigger it manually
+  console.log('Image preview set:', previewSrc);
+}, [previewSrc, faceApiLoaded]);
 
-  const img = new Image();
-  img.crossOrigin = "anonymous";
-  img.src = previewSrc;
 
-  img.onload = () => {
-    if (!canvasRef.current) return;
+
+// Fixed handleImageUpload function
+const handleImageUpload = (event) => {
+  const file = event.target.files[0];
+  console.log('File selected:', file);
+  
+  if (!file) {
+    console.log('No file selected');
+    return;
+  }
+  
+  if (!faceApiLoaded) {
+    alert('AI models are still loading. Please wait a moment and try again.');
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const result = e.target.result;
+    console.log('File read successfully, setting preview');
+    setPreviewSrc(result);
+    setDetectedEmotion(null); // Clear previous results
+  };
+  
+  reader.onerror = (error) => {
+    console.error('Error reading file:', error);
+    alert('Error reading the selected file. Please try again.');
+  };
+  
+  reader.readAsDataURL(file);
+};
+
+// Fixed analyzeImage function
+const analyzeImage = async () => {
+  if (!imageRef.current || !canvasRef.current || !previewSrc) {
+    console.log('Missing required elements for analysis');
+    return;
+  }
+
+  console.log('Starting image analysis...');
+  setIsAnalyzing(true);
+  
+  try {
+    // Ensure image is loaded
+    const img = imageRef.current;
+    if (!img.complete || !img.naturalWidth) {
+      console.log('Image not fully loaded yet');
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = reject;
+        // If image is already loaded but onload didn't fire
+        if (img.complete) resolve();
+      });
+    }
 
     const canvas = canvasRef.current;
     canvas.width = img.naturalWidth;
     canvas.height = img.naturalHeight;
 
     const ctx = canvas.getContext("2d");
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0);
 
-    analyzeImage(); // 🔍 only run after the image is drawn to canvas
-  };
-}, [previewSrc, faceApiLoaded]);
+    console.log('Canvas prepared, running face detection...');
 
-
-const handleImageUpload = (event) => {
-  const file = event.target.files[0];
-  if (!file || !faceApiLoaded) return;
-
-  const reader = new FileReader();
-  reader.onload = () => {
-    const result = reader.result;
-    setPreviewSrc(result); // ✅ triggers image load in DOM
-  };
-  reader.readAsDataURL(file);
-};
-
-
-const analyzeImage = async () => {
-  if (!imageRef.current || !canvasRef.current) return;
-
-  setIsAnalyzing(true);
-  const canvas = canvasRef.current;
-
-  const width = imageRef.current.naturalWidth;
-  const height = imageRef.current.naturalHeight;
-  canvas.width = width;
-  canvas.height = height;
-
-  const ctx = canvas.getContext("2d");
-  ctx.drawImage(imageRef.current, 0, 0, width, height);
-
-  try {
     const detections = await faceapi
       .detectAllFaces(canvas, new faceapi.TinyFaceDetectorOptions())
       .withFaceExpressions();
 
+    console.log('Detections:', detections);
+
     if (detections.length === 0) {
-      alert("No face detected.");
+      alert("No face detected in the image. Please try with a clearer photo showing your face.");
       return;
     }
 
@@ -333,7 +223,7 @@ const analyzeImage = async () => {
 
     const emotionToMood = {
       happy: "great",
-      neutral: "okay",
+      neutral: "okay", 
       sad: "sad",
       angry: "low",
       fearful: "low",
@@ -341,19 +231,29 @@ const analyzeImage = async () => {
       surprised: "good",
     };
 
-    setDetectedEmotion({
+    const detectedMood = emotionToMood[emotion] || "okay";
+
+    const result = {
       emotion,
       confidence,
-      mood: emotionToMood[emotion] || "okay",
+      mood: detectedMood,
       timestamp: new Date().toLocaleString(),
-    });
+    };
+
+    console.log('Analysis result:', result);
+    setDetectedEmotion(result);
+
+    // Auto-save the mood
+    await handleMoodSelect(detectedMood, true, `AI detected from selfie: ${emotion} (${confidence}% confidence)`);
+
   } catch (err) {
-    console.error("❌ Error during analysis", err);
-    alert("Failed to analyze image.");
+    console.error("Error during analysis:", err);
+    alert("Failed to analyze image. Please try again.");
   } finally {
     setIsAnalyzing(false);
   }
 };
+
 
   const loadFaceApiModels = async () => {
     try {
@@ -652,51 +552,126 @@ const analyzeImage = async () => {
     );
   };
 
-  const CameraModal = ({ handleImageUpload, imageRef, canvasRef, isAnalyzing, detectedEmotion, setShowMoodModal }) => { 
+  // Fixed CameraModal component
+  const CameraModal = () => {
     return (
-      <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-        <div className="p-6 max-w-xl w-full mx-auto bg-gray-900 text-white rounded-lg shadow-lg">
-          <div className="flex justify-between items-center mb-4">
-            <h2 className="text-2xl font-bold">Upload a Selfie for Mood Detection</h2>
-            <button
-              onClick={() => setShowMoodModal(false)}
-              className="text-white bg-white/20 hover:bg-white/30 rounded-md px-2 py-1 text-sm"
-            >
-              Close
-            </button>
-          </div>
-
-          <input
-            type="file"
-            accept="image/*"
-            onChange={handleImageUpload}
-            className="mb-4 block w-full text-sm text-gray-300 file:bg-pink-500 file:text-white file:rounded-lg file:border-0 file:px-4 file:py-2 hover:file:bg-pink-600"
-          />
-
-          {previewSrc && (
-            <img
-              src={previewSrc}
-              alt="Uploaded preview"
-              className="w-full rounded-lg mb-4"
-            />
-          )}
-
-          <canvas ref={canvasRef} className="hidden" />
-
-          {isAnalyzing && (
-            <p className="text-sm text-pink-300">Analyzing mood...</p>
-          )}
-
-          {detectedEmotion && (
-            <div className="bg-white/10 rounded-lg p-4 mt-4 text-center">
-              <p className="text-lg font-semibold capitalize">Emotion: {detectedEmotion.emotion}</p>
-              <p className="text-sm">Confidence: {detectedEmotion.confidence}%</p>
-              <p className="text-sm">Mood: {detectedEmotion.mood}</p>
+      <div className="fixed inset-0 bg-black bg-opacity-80 z-50 flex items-center justify-center p-4">
+        <div className="bg-gray-900 rounded-lg shadow-xl max-w-md w-full mx-4 max-h-[90vh] overflow-y-auto">
+          <div className="p-6">
+            {/* Header */}
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-xl font-bold text-white">Mood Selfie Analysis</h2>
+              <button
+                onClick={() => {
+                  setShowMoodModal(false);
+                  setPreviewSrc(null);
+                  setDetectedEmotion(null);
+                }}
+                className="text-gray-400 hover:text-white transition-colors p-1"
+              >
+                <X className="w-5 h-5" />
+              </button>
             </div>
-          )}
+
+            {/* File Input */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-300 mb-2">
+                Choose a photo of yourself
+              </label>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={handleImageUpload}
+                className="block w-full text-sm text-gray-300
+                  file:mr-4 file:py-2 file:px-4
+                  file:rounded-lg file:border-0
+                  file:text-sm file:font-semibold
+                  file:bg-pink-600 file:text-white
+                  hover:file:bg-pink-700
+                  file:cursor-pointer cursor-pointer
+                  border border-gray-600 rounded-lg
+                  focus:border-pink-500 focus:outline-none"
+              />
+            </div>
+
+            {/* Image Preview */}
+            {previewSrc && (
+              <div className="mb-4">
+                <img
+                  ref={imageRef}
+                  src={previewSrc}
+                  alt="Preview"
+                  className="w-full max-h-64 object-contain rounded-lg border-2 border-gray-600"
+                  style={{ display: 'block' }}
+                />
+              </div>
+            )}
+
+            {/* Hidden Canvas */}
+            <canvas ref={canvasRef} style={{ display: 'none' }} />
+
+            {/* Analyze Button */}
+            {previewSrc && !isAnalyzing && !detectedEmotion && (
+              <button
+                onClick={analyzeImage}
+                disabled={!faceApiLoaded}
+                className="w-full mb-4 py-3 px-4 bg-pink-600 hover:bg-pink-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg text-white font-medium transition-colors"
+              >
+                {faceApiLoaded ? 'Analyze My Mood' : 'Loading AI Models...'}
+              </button>
+            )}
+
+            {/* Loading State */}
+            {isAnalyzing && (
+              <div className="text-center py-4">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-pink-500 mx-auto mb-2"></div>
+                <p className="text-white text-sm">Analyzing your expression...</p>
+              </div>
+            )}
+
+            {/* Results */}
+            {detectedEmotion && (
+              <div className="bg-gradient-to-r from-purple-900/50 to-pink-900/50 rounded-lg p-4 border border-purple-500/30">
+                <h3 className="text-lg font-semibold text-white mb-3 text-center">Analysis Results</h3>
+                <div className="space-y-2 text-center">
+                  <p className="text-xl font-bold text-pink-300 capitalize">
+                    {detectedEmotion.emotion}
+                  </p>
+                  <p className="text-sm text-purple-200">
+                    Confidence: {detectedEmotion.confidence}%
+                  </p>
+                  <p className="text-sm text-blue-200">
+                    Mood: <span className="font-semibold capitalize">{detectedEmotion.mood}</span>
+                  </p>
+                  <div className="mt-4 pt-3 border-t border-gray-600">
+                    <p className="text-sm text-green-300">
+                      ✅ Mood saved to your history!
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Face API Status */}
+            {!faceApiLoaded && (
+              <div className="bg-yellow-900/50 border border-yellow-600/50 rounded-lg p-3 text-center">
+                <p className="text-sm text-yellow-200">
+                  🔄 Loading AI models... Please wait.
+                </p>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     );
+  };
+
+  // Debug function - add this temporarily to check if modal opens
+  const debugModalOpen = () => {
+    console.log('Modal button clicked');
+    console.log('showMoodModal state:', showMoodModal);
+    setShowMoodModal(true);
+    console.log('setShowMoodModal(true) called');
   };
 
   const trendData = getMoodTrend();
@@ -816,7 +791,7 @@ const analyzeImage = async () => {
           >
             <div className="space-y-3">
               <button
-                onClick={() => setShowMoodModal(true)} // rename if needed
+                onClick={debugModalOpen} // Use this instead of () => setShowMoodModal(true)
                 className="w-full px-4 py-2 bg-white/20 backdrop-blur-sm rounded-lg text-white font-medium hover:bg-white/30 transition-colors flex items-center justify-center gap-2"
               >
                 <ImageIcon className="w-5 h-5" />
@@ -994,16 +969,15 @@ const analyzeImage = async () => {
         </div>
       </div>
 
-      {/* Camera Modal */}
+      {/* Add this debugging info temporarily */}
+      {console.log('Render - showMoodModal:', showMoodModal)}
+
+      {/* Camera Modal - put this at the very end of your return statement */}
       {showMoodModal && (
-        <CameraModal
-          handleImageUpload={handleImageUpload}
-          imageRef={imageRef}
-          canvasRef={canvasRef}
-          isAnalyzing={isAnalyzing}
-          detectedEmotion={detectedEmotion}
-          setShowMoodModal={setShowMoodModal}
-        />
+        <div>
+          {console.log('Modal should be rendering now')}
+          <CameraModal />
+        </div>
       )}
     </div>
   );
